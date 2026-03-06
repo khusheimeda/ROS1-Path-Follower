@@ -1,0 +1,208 @@
+# 3
+
+#!/usr/bin/env python3
+import math
+import rospy
+from geometry_msgs.msg import Twist
+from turtlesim.msg import Pose
+from turtlesim.srv import SetPen, TeleportAbsolute
+from std_srvs.srv import Empty
+
+
+def normalize_angle(angle):
+    while angle > math.pi:
+        angle -= 2.0 * math.pi
+    while angle < -math.pi:
+        angle += 2.0 * math.pi
+    return angle
+
+
+class MPathDrawer:
+    def __init__(self):
+        rospy.init_node("p1d2_khushei_meda", anonymous=False)
+        self.pose = None
+        self.pose_ready = False
+        self.cmd_pub = rospy.Publisher("/turtle1/cmd_vel", Twist, queue_size=10)
+        rospy.Subscriber("/turtle1/pose", Pose, self.pose_callback, queue_size=10)
+
+        rospy.wait_for_service("/clear")
+        rospy.wait_for_service("/turtle1/set_pen")
+        rospy.wait_for_service("/turtle1/teleport_absolute")
+        self.clear_srv = rospy.ServiceProxy("/clear", Empty)
+        self.set_pen_srv = rospy.ServiceProxy("/turtle1/set_pen", SetPen)
+        self.teleport_srv = rospy.ServiceProxy("/turtle1/teleport_absolute", TeleportAbsolute)
+
+        self.k_lin = rospy.get_param("~k_lin", 2.0)
+        self.k_ang = rospy.get_param("~k_ang", 8.5)
+        self.v_max = rospy.get_param("~v_max", 1.8)
+        self.w_max = rospy.get_param("~w_max", 8.0)
+        self.dist_tol = rospy.get_param("~dist_tol", 0.02)
+        self.heading_tol = rospy.get_param("~heading_tol", 0.006)
+        self.heading_slow_tol = rospy.get_param("~heading_slow_tol", 0.05)
+        self.timeout_s = rospy.get_param("~timeout_s", 120.0)
+        self.rate_hz = rospy.get_param("~rate_hz", 100.0)
+        self.segment_settle_s = rospy.get_param("~segment_settle_s", 0.03)
+        self.pen_r = rospy.get_param("~pen_r", 0)
+        self.pen_g = rospy.get_param("~pen_g", 0)
+        self.pen_b = rospy.get_param("~pen_b", 255)
+        self.pen_width = rospy.get_param("~pen_width", 2)
+
+        self.waypoints = [
+            (2.050, 9.950),
+            (4.380, 9.950),
+            (5.520, 6.050),
+            (7.800, 9.950),
+            (10.080, 9.950),
+            (9.770, 7.860),
+            (9.280, 7.860),
+            (9.090, 6.710),
+            (8.450, 2.560),
+            (8.920, 2.560),
+            (8.580, 0.700),
+            (6.270, 0.700),
+            (6.940, 5.250),
+            (4.940, 1.790),
+            (3.760, 5.170),
+            (3.010, 0.700),
+            (0.610, 0.700),
+            (0.940, 2.560),
+            (1.400, 2.560),
+            (2.280, 7.860),
+            (1.770, 7.860),
+            (2.050, 9.950),
+        ]
+
+    def pose_callback(self, msg):
+        self.pose = msg
+        self.pose_ready = True
+
+    def clamp(self, value, low, high):
+        return max(low, min(high, value))
+
+    def publish_stop(self):
+        self.cmd_pub.publish(Twist())
+
+    def pen_up(self):
+        self.set_pen_srv(self.pen_r, self.pen_g, self.pen_b, self.pen_width, 1)
+
+    def pen_down(self):
+        self.set_pen_srv(self.pen_r, self.pen_g, self.pen_b, self.pen_width, 0)
+
+    def snap_to_waypoint(self, x, y, theta):
+        self.pen_up()
+        self.teleport_srv(x, y, theta)
+        self.pen_down()
+
+    def rotate_to_heading(self, heading, deadline):
+        r = rospy.Rate(self.rate_hz)
+        while not rospy.is_shutdown():
+            if rospy.Time.now() > deadline:
+                return False
+            if not self.pose_ready:
+                r.sleep()
+                continue
+            yaw_err = normalize_angle(heading - self.pose.theta)
+            if abs(yaw_err) < self.heading_tol:
+                self.publish_stop()
+                return True
+            cmd = Twist()
+            cmd.angular.z = self.clamp(self.k_ang * yaw_err, -self.w_max, self.w_max)
+            self.cmd_pub.publish(cmd)
+            r.sleep()
+        return False
+
+    def drive_segment(self, start, goal, heading, deadline):
+        r = rospy.Rate(self.rate_hz)
+        sx, sy = start
+        gx, gy = goal
+        seg_dx = gx - sx
+        seg_dy = gy - sy
+        seg_len = math.hypot(seg_dx, seg_dy)
+        if seg_len < 1e-9:
+            return True
+        ux = seg_dx / seg_len
+        uy = seg_dy / seg_len
+        while not rospy.is_shutdown():
+            if rospy.Time.now() > deadline:
+                return False
+            if not self.pose_ready:
+                r.sleep()
+                continue
+            px = self.pose.x
+            py = self.pose.y
+            vx = px - sx
+            vy = py - sy
+            s = vx * ux + vy * uy
+            rem = seg_len - s
+            dist_goal = math.hypot(gx - px, gy - py)
+            if dist_goal < self.dist_tol or rem < self.dist_tol:
+                self.publish_stop()
+                return True
+            yaw_err = normalize_angle(heading - self.pose.theta)
+            cmd = Twist()
+            if abs(yaw_err) > self.heading_slow_tol:
+                self.publish_stop()
+                self.pen_up()
+                if not self.rotate_to_heading(heading, deadline):
+                    return False
+                self.pen_down()
+                r.sleep()
+                continue
+            else:
+                cmd.linear.x = self.clamp(self.k_lin * rem, 0.0, self.v_max)
+                cmd.angular.z = 0.0
+            self.cmd_pub.publish(cmd)
+            r.sleep()
+        return False
+
+    def run(self):
+        wait_start = rospy.Time.now()
+        r = rospy.Rate(50)
+        while not rospy.is_shutdown() and not self.pose_ready:
+            if (rospy.Time.now() - wait_start).to_sec() > 5.0:
+                break
+            r.sleep()
+        self.clear_srv()
+        self.pen_up()
+        start_x, start_y = self.waypoints[0]
+        self.teleport_srv(start_x, start_y, 0.0)
+        self.pen_down()
+
+        t0 = rospy.Time.now()
+        deadline = t0 + rospy.Duration.from_sec(self.timeout_s)
+        ok = True
+        for i in range(1, len(self.waypoints)):
+            a = self.waypoints[i - 1]
+            b = self.waypoints[i]
+            heading = math.atan2(b[1] - a[1], b[0] - a[0])
+            rospy.loginfo("Segment %d/%d: moving to (%.3f, %.3f)", i, len(self.waypoints) - 1, b[0], b[1])
+            self.pen_up()
+            if not self.rotate_to_heading(heading, deadline):
+                ok = False
+                break
+            self.pen_down()
+            if not self.drive_segment(a, b, heading, deadline):
+                ok = False
+                break
+            theta = heading
+            if self.pose_ready:
+                theta = self.pose.theta
+            self.snap_to_waypoint(b[0], b[1], theta)
+            self.publish_stop()
+            rospy.sleep(self.segment_settle_s)
+
+        self.publish_stop()
+        elapsed = (rospy.Time.now() - t0).to_sec()
+        if ok:
+            rospy.loginfo("Path complete within time limit. Total time: %.3f s", elapsed)
+        else:
+            rospy.logwarn("Path aborted by timeout/shutdown. Elapsed: %.3f s", elapsed)
+
+
+if __name__ == "__main__":
+    try:
+        drawer = MPathDrawer()
+        drawer.run()
+    except rospy.ROSInterruptException:
+        pass
+
