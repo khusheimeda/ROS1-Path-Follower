@@ -84,7 +84,3 @@ The drawing is completed in ~74.5 sec.
 - `~segment_settle_s` = `0.03`
 - `~pen_r` = `0`, `~pen_g` = `0`, `~pen_b` = `255`
 - `~pen_width` = `2`
-
-## AI Disclosure
-
-Used GPT-5.3-Codex to help with writing the program
