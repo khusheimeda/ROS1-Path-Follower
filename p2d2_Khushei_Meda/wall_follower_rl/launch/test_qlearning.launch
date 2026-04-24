@@ -1,0 +1,6 @@
+<launch>
+  <include file="$(find wall_follower_rl)/launch/wall_follower.launch">
+    <arg name="algorithm" value="qlearning" />
+    <arg name="mode"      value="test" />
+  </include>
+</launch>

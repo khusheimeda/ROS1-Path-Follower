@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  wall_follower.launch  -  Gazebo + Triton Robot + Q-Learning, all in one.
+
+  Usage:
+    roslaunch wall_follower_rl wall_follower.launch algorithm:=qlearning mode:=train
+    roslaunch wall_follower_rl wall_follower.launch algorithm:=qlearning mode:=test
+    roslaunch wall_follower_rl wall_follower.launch algorithm:=qlearning mode:=train num_episodes:=500
+-->
+<launch>
+
+  <!-- ============ Arguments ============ -->
+  <arg name="algorithm"      default="qlearning" />
+  <arg name="mode"           default="train" />
+  <arg name="model_name"     default="triton" />
+  <arg name="q_table_path"   default="$(find wall_follower_rl)/q_tables/q_table_$(arg algorithm).csv" />
+
+  <!-- Hyper-parameters -->
+  <arg name="num_episodes"   default="500" />
+  <arg name="alpha"          default="0.10" />
+  <arg name="gamma"          default="0.95" />
+  <arg name="epsilon_start"  default="0.90" />
+  <arg name="epsilon_min"    default="0.05" />
+  <arg name="epsilon_decay"  default="0.997" />
+
+
+  <!-- ============ 1. Gazebo + Triton Robot (from stingray_sim) ============ -->
+  <arg name="spawn_x"   default="-0.5" />
+  <arg name="spawn_y"   default="-0.26" />
+  <arg name="spawn_yaw" default="0.0" />
+
+  <include file="$(find stingray_sim)/launch/wall_following.launch">
+    <arg name="x"   value="$(arg spawn_x)" />
+    <arg name="y"   value="$(arg spawn_y)" />
+    <arg name="yaw" value="$(arg spawn_yaw)" />
+  </include>
+
+
+  <!-- ============ 2. Q-Learning Node ============ -->
+  <group if="$(eval algorithm == 'qlearning')">
+    <node pkg="wall_follower_rl"
+          type="q_learning_node.py"
+          name="q_learning_node"
+          output="screen"
+          respawn="false"
+          launch-prefix="bash -c 'sleep 5; exec $0 $@' ">
+      <param name="mode"          value="$(arg mode)" />
+      <param name="q_table_path"  value="$(arg q_table_path)" />
+      <param name="model_name"    value="$(arg model_name)" />
+      <param name="num_episodes"  value="$(arg num_episodes)" />
+      <param name="alpha"         value="$(arg alpha)" />
+      <param name="gamma"         value="$(arg gamma)" />
+      <param name="epsilon_start" value="$(arg epsilon_start)" />
+      <param name="epsilon_min"   value="$(arg epsilon_min)" />
+      <param name="epsilon_decay" value="$(arg epsilon_decay)" />
+    </node>
+  </group>
+
+  <!-- ============ 3. SARSA Node ============ -->
+  <group if="$(eval algorithm == 'sarsa')">
+    <node pkg="wall_follower_rl"
+          type="sarsa_node.py"
+          name="sarsa_node"
+          output="screen"
+          respawn="false"
+          launch-prefix="bash -c 'sleep 5; exec $0 $@' ">
+      <param name="mode"          value="$(arg mode)" />
+      <param name="q_table_path"  value="$(arg q_table_path)" />
+      <param name="model_name"    value="$(arg model_name)" />
+      <param name="num_episodes"  value="$(arg num_episodes)" />
+      <param name="alpha"         value="$(arg alpha)" />
+      <param name="gamma"         value="$(arg gamma)" />
+      <param name="epsilon_start" value="$(arg epsilon_start)" />
+      <param name="epsilon_min"   value="$(arg epsilon_min)" />
+      <param name="epsilon_decay" value="$(arg epsilon_decay)" />
+    </node>
+  </group>
+
+</launch>
